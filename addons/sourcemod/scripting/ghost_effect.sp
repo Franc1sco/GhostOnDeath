@@ -8,13 +8,19 @@
 
 #pragma newdecls required
 
-#define VERSION "1.0"
+#define VERSION "1.1"
 
 // Boolean per client for disable his ghost
 bool g_bGhost[MAXPLAYERS+1];
 
 // Boolean for disable ghosts in general
 bool g_bGhostsEnabled = true;
+
+// Declare convar variables
+ConVar g_cvGhostTime, g_cvGhostWarmup, g_cvGhostWarmupTime, g_cvGhostColor;
+
+bool g_bGhostWarmup, g_bGhostColor;
+float g_fGhostWarmupTime, g_fGhostTime;
 
 public Plugin myinfo = {
 	name = "SM CS:GO Ghost on Death",
@@ -26,6 +32,17 @@ public Plugin myinfo = {
 
 public void OnPluginStart()
 {
+	
+	g_cvGhostTime = CreateConVar("sm_ghost_time", "0.0", "Ghost appear time, 0.0 = Disappear in next round start.", 0, true);
+	g_cvGhostWarmup = CreateConVar("sm_ghost_warmup", "0", "Ghost appear in warmup? 1 = yes, 0 = no", 0, true, 0.0, true, 1.0);
+	g_cvGhostWarmupTime = CreateConVar("sm_ghost_warmup_time", "10.0", "Ghost appear time in warmup. 0.0 = Forever.", 0, true, 0.0, true, 1.0);
+	g_cvGhostColor = CreateConVar("sm_ghost_team_color", "0", "Set ghost color depending on client team? 1 = yes, 0 = no, use random color.", 0, true, 0.0, true, 1.0);
+	
+	g_fGhostTime = GetConVarFloat(g_cvGhostTime);
+	g_bGhostWarmup = GetConVarBool(g_cvGhostWarmup);
+	g_fGhostWarmupTime = GetConVarFloat(g_cvGhostWarmupTime);
+	g_bGhostColor = GetConVarBool(g_cvGhostColor);
+	
 	// Command for ROOT admins to disable ghosts in general
 	RegAdminCmd("sm_ghosts", Command_ToggleForAll, ADMFLAG_ROOT);
 	
@@ -35,10 +52,35 @@ public void OnPluginStart()
 	//Hook Death event where the ghost will appear
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Pre);
 	
+	HookConVarChange(g_cvGhostTime, OnSettingChanged);
+	HookConVarChange(g_cvGhostWarmup, OnSettingChanged);
+	HookConVarChange(g_cvGhostWarmupTime, OnSettingChanged);
+	HookConVarChange(g_cvGhostColor, OnSettingChanged);
+	
 	// Enable ghost for clients on late load by default
 	for (int i = 1; i <= MaxClients; i++)
 		if (IsClientInGame(i))
 			g_bGhost[i] = true;		
+}
+
+public int OnSettingChanged(Handle convar, const char[] oldValue, const char[] newValue)
+{
+	if (convar == g_cvGhostTime)
+	{
+		g_fGhostTime = StringToFloat(newValue);
+	}
+	else if (convar == g_cvGhostWarmup)
+	{
+		g_bGhostWarmup = view_as<bool>(StringToInt(newValue));
+	}
+	else if (convar == g_cvGhostWarmupTime)
+	{
+		g_fGhostWarmupTime = StringToFloat(newValue);
+	}
+	else if (convar == g_cvGhostColor)
+	{
+		g_bGhostColor = view_as<bool>(StringToInt(newValue));
+	}
 }
 
 public void OnMapStart()
@@ -96,6 +138,10 @@ public Action Event_PlayerDeath(Handle hEvent, char[] sName, bool bDontBroadcast
 	// If ghosts has been disabled by a admin then dont continue with the code
 	if (!g_bGhostsEnabled) return;
 	
+	bool bWarmup = GameRules_GetProp("m_bWarmupPeriod") == 1; // Get warmup bool
+	
+	if (bWarmup && !g_bGhostWarmup)return;
+	
 	// We get the client of this event
 	int iClient = GetClientOfUserId(GetEventInt(hEvent, "userid"));
 	
@@ -115,7 +161,31 @@ public Action Event_PlayerDeath(Handle hEvent, char[] sName, bool bDontBroadcast
 	// Spawn the particle effect
 	int iGhost = CreateEntityByName("info_particle_system");
 	DispatchKeyValue(iGhost, "start_active", "0");
-	DispatchKeyValue(iGhost, "effect_name", sGhostColor); // We set the ghost color here
+	
+	if(g_bGhostColor)
+		DispatchKeyValue(iGhost, "effect_name", sGhostColor); // We set the ghost color here
+	else {
+		switch(GetRandomInt(1, 4))
+		{
+			case 1:
+			{
+				DispatchKeyValue(iGhost, "effect_name", "Ghost_Cyan");
+			}
+			case 2:
+			{
+				DispatchKeyValue(iGhost, "effect_name", "Ghost_Green");
+			}
+			case 3:
+			{
+				DispatchKeyValue(iGhost, "effect_name", "Ghost_Red");
+			}
+			case 4:
+			{
+				DispatchKeyValue(iGhost, "effect_name", "Ghost_Orange");
+			}
+		}
+	}
+	
 	DispatchSpawn(iGhost); // Spawn the particle on World
 
 	TeleportEntity(iGhost, fPos, NULL_VECTOR, NULL_VECTOR); // Teleport to the correct position
@@ -123,6 +193,26 @@ public Action Event_PlayerDeath(Handle hEvent, char[] sName, bool bDontBroadcast
 	// Activate the particle
 	ActivateEntity(iGhost);
 	AcceptEntityInput(iGhost, "Start");
+	
+	if(!bWarmup){
+		if(g_fGhostTime > 0.0)
+			CreateTimer(g_fGhostTime, Timer_KillGhost, iGhost);
+	}
+	else if(g_fGhostWarmupTime > 0.0)
+		CreateTimer(g_fGhostWarmupTime, Timer_KillGhost, iGhost);
+}
+
+public Action Timer_KillGhost(Handle timer, int entity)
+{
+	if(!IsValidEntity(entity))	return;
+		
+	AcceptEntityInput(entity, "DestroyImmediately");
+	CreateTimer(0.1, Timer_KillGhostParticle, entity); 
+}
+
+public Action Timer_KillGhostParticle(Handle timer, int entity)
+{
+	if(IsValidEntity(entity)) AcceptEntityInput(entity, "kill");
 }
 
 /*
