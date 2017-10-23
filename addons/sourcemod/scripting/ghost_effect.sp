@@ -14,9 +14,9 @@
  * You should have received a copy of the GNU General Public License along with 
  * this program. If not, see http://www.gnu.org/licenses/.
  */
-
 #include <sourcemod>
 #include <sdktools>
+//#include <sdkhooks>
 
 // NO THIS TIME LOL
 //
@@ -25,7 +25,7 @@
 
 #pragma newdecls required
 
-#define VERSION "1.1"
+#define VERSION "1.1.1"
 
 // Boolean per client for disable his ghost
 bool g_bGhost[MAXPLAYERS+1];
@@ -35,10 +35,15 @@ bool g_bGhostsEnabled = true;
 
 // Declare convar variables
 ConVar g_cvGhostTime, g_cvGhostWarmup, g_cvGhostWarmupTime, g_cvGhostColor;
+//ConVar g_cvGhostAbsorb, g_cvGhostAbsorbHealth;
 
 bool g_bGhostWarmup, g_bGhostColor;
 float g_fGhostWarmupTime, g_fGhostTime;
 
+/*
+bool g_bGhostAbsorb;
+int g_iGhostAbsorbHealth;
+*/
 public Plugin myinfo = {
 	name = "SM CS:GO Ghost on Death",
 	author = "Franc1sco franug",
@@ -54,11 +59,15 @@ public void OnPluginStart()
 	g_cvGhostWarmup = CreateConVar("sm_ghost_warmup", "0", "Ghost appear in warmup? 1 = yes, 0 = no", 0, true, 0.0, true, 1.0);
 	g_cvGhostWarmupTime = CreateConVar("sm_ghost_warmup_time", "10.0", "Ghost appear time in warmup. 0.0 = Forever.", 0, true, 0.0, true, 1.0);
 	g_cvGhostColor = CreateConVar("sm_ghost_team_color", "0", "Set ghost color depending on client team? 1 = yes, 0 = no, use random color.", 0, true, 0.0, true, 1.0);
+	//g_cvGhostAbsorb = CreateConVar("sm_ghost_absorb", "1", "People can absorb ghost? 1 = yes, 0 = no.", 0, true, 0.0, true, 1.0);
+	//g_cvGhostAbsorbHealth = CreateConVar("sm_ghost_absorb_health", "10", "How much health people gain for absorb a ghost");
 	
 	g_fGhostTime = GetConVarFloat(g_cvGhostTime);
 	g_bGhostWarmup = GetConVarBool(g_cvGhostWarmup);
 	g_fGhostWarmupTime = GetConVarFloat(g_cvGhostWarmupTime);
 	g_bGhostColor = GetConVarBool(g_cvGhostColor);
+	//g_bGhostAbsorb = GetConVarBool(g_cvGhostAbsorb);
+	//g_iGhostAbsorbHealth = GetConVarInt(g_cvGhostAbsorbHealth);
 	
 	// Command for ROOT admins to disable ghosts in general
 	RegAdminCmd("sm_ghosts", Command_ToggleForAll, ADMFLAG_ROOT);
@@ -69,10 +78,13 @@ public void OnPluginStart()
 	//Hook Death event where the ghost will appear
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Pre);
 	
+	// Hook convar changes
 	HookConVarChange(g_cvGhostTime, OnSettingChanged);
 	HookConVarChange(g_cvGhostWarmup, OnSettingChanged);
 	HookConVarChange(g_cvGhostWarmupTime, OnSettingChanged);
 	HookConVarChange(g_cvGhostColor, OnSettingChanged);
+	//HookConVarChange(g_cvGhostAbsorb, OnSettingChanged);
+	//HookConVarChange(g_cvGhostAbsorbHealth, OnSettingChanged);
 	
 	// Enable ghost for clients on late load by default
 	for (int i = 1; i <= MaxClients; i++)
@@ -98,13 +110,21 @@ public int OnSettingChanged(Handle convar, const char[] oldValue, const char[] n
 	{
 		g_bGhostColor = view_as<bool>(StringToInt(newValue));
 	}
+	/*
+	else if (convar == g_cvGhostAbsorb)
+	{
+		g_bGhostAbsorb = view_as<bool>(StringToInt(newValue));
+	}
+	else if (convar == g_cvGhostAbsorbHealth)
+	{
+		g_iGhostAbsorbHealth = StringToInt(newValue);
+	}*/
 }
 
 public void OnMapStart()
 {
 	// Download materials/particles and prechache for prevent client crashes
 	AddFileToDownloadsTable("particles/ghosts.pcf");
-	PrecacheGeneric("particles/ghosts.pcf", true);
 	
 	AddFileToDownloadsTable("materials/effects/largesmoke.vmt");
 	PrecacheModel("materials/effects/largesmoke.vmt");
@@ -120,8 +140,13 @@ public void OnMapStart()
 	
 	AddFileToDownloadsTable("materials/effects/outline_translucent.vtf");
 	
-	// Prechache the particle correcly for prevent client crashes (Thanks Rachnus)
-	PrecacheParticleSystem("ghosts");
+	// Prechache the particle correcly for prevent client crashes
+	PrecacheGeneric("particles/ghosts.pcf", true);
+	PrecacheEffect("ParticleEffect");
+	PrecacheParticleEffect("Ghost_Cyan");
+	PrecacheParticleEffect("Ghost_Green");
+	PrecacheParticleEffect("Ghost_Red");
+	PrecacheParticleEffect("Ghost_Orange");
 }
 
 public Action Command_TogglePerClient(int iClient, int iArgs)
@@ -211,67 +236,77 @@ public Action Event_PlayerDeath(Handle hEvent, char[] sName, bool bDontBroadcast
 	ActivateEntity(iGhost);
 	AcceptEntityInput(iGhost, "Start");
 	
+	SetEntPropEnt(iGhost, Prop_Send, "m_hOwnerEntity", iClient);
+	
+	//if(g_bGhostAbsorb) SDKHook(iGhost, SDKHook_Touch, SDKHookCB_Touch);
+	
 	if(!bWarmup){
 		if(g_fGhostTime > 0.0)
-			CreateTimer(g_fGhostTime, Timer_KillGhost, iGhost);
+			CreateTimer(g_fGhostTime, Timer_KillGhost, EntIndexToEntRef(iGhost));
 	}
 	else if(g_fGhostWarmupTime > 0.0)
-		CreateTimer(g_fGhostWarmupTime, Timer_KillGhost, iGhost);
+		CreateTimer(g_fGhostWarmupTime, Timer_KillGhost,EntIndexToEntRef(iGhost));
 }
 
-public Action Timer_KillGhost(Handle timer, int entity)
+public Action Timer_KillGhost(Handle hTimer, int iRef)
 {
-	if(!IsValidEntity(entity))	return;
+	// We get a safe index
+	int iEntity = EntRefToEntIndex(iRef);
+	
+	if(iEntity == INVALID_ENT_REFERENCE || !IsValidEntity(iEntity))	return;
 		
-	AcceptEntityInput(entity, "DestroyImmediately");
-	CreateTimer(0.1, Timer_KillGhostParticle, entity); 
+	AcceptEntityInput(iEntity, "DestroyImmediately");
+	CreateTimer(0.1, Timer_KillGhostParticle, iRef); 
 }
 
-public Action Timer_KillGhostParticle(Handle timer, int entity)
+public Action Timer_KillGhostParticle(Handle hTimer, int iRef)
 {
-	if(IsValidEntity(entity)) AcceptEntityInput(entity, "kill");
+	int iEntity = EntRefToEntIndex(iRef);
+	
+	if(iEntity == INVALID_ENT_REFERENCE || !IsValidEntity(iEntity))	return;
+	
+	AcceptEntityInput(iEntity, "kill");
 }
+/*
+public void SDKHookCB_Touch(int iGhost, int iClient)
+{
+	if (iClient < 1 || iClient > MaxClients)return;
+	
+	SDKUnhook(iGhost, SDKHook_Touch, SDKHookCB_Touch);
+	CreateTimer(0.0, Timer_KillGhost, EntIndexToEntRef(iGhost));
+	
+	SetEntityHealth(iClient, GetClientHealth(iClient) + g_iGhostAbsorbHealth);
+	
+	PrintToChat(iClient, "You have absorbed %N and gained %s health.",GetEntPropEnt(iGhost, Prop_Send, "m_hOwnerEntity"), g_iGhostAbsorbHealth);
+}*/
 
 /*
-		The code starting from here has been taken from https://forums.alliedmods.net/showthread.php?p=2549099
+	The code starting from here has been taken from https://forums.alliedmods.net/showpost.php?p=2471747&postcount=4
 */
-stock int PrecacheParticleSystem(const char[] particleSystem)
+
+stock void PrecacheEffect(const char[] sEffectName)
 {
-    static int particleEffectNames = INVALID_STRING_TABLE;
-
-    if (particleEffectNames == INVALID_STRING_TABLE) {
-        if ((particleEffectNames = FindStringTable("ParticleEffectNames")) == INVALID_STRING_TABLE) {
-            return INVALID_STRING_INDEX;
-        }
-    }
-
-    int index = FindStringIndex2(particleEffectNames, particleSystem);
-    if (index == INVALID_STRING_INDEX) {
-        int numStrings = GetStringTableNumStrings(particleEffectNames);
-        if (numStrings >= GetStringTableMaxStrings(particleEffectNames)) {
-            return INVALID_STRING_INDEX;
-        }
-        
-        AddToStringTable(particleEffectNames, particleSystem);
-        index = numStrings;
-    }
+    static int table = INVALID_STRING_TABLE;
     
-    return index;
+    if (table == INVALID_STRING_TABLE)
+    {
+        table = FindStringTable("EffectDispatch");
+    }
+    bool save = LockStringTables(false);
+    AddToStringTable(table, sEffectName);
+    LockStringTables(save);
 }
 
-stock int FindStringIndex2(int tableidx, const char[] str)
+stock void PrecacheParticleEffect(const char[] sEffectName)
 {
-    char buf[1024];
+    static int table = INVALID_STRING_TABLE;
     
-    int numStrings = GetStringTableNumStrings(tableidx);
-    for (int i=0; i < numStrings; i++) {
-        ReadStringTable(tableidx, i, buf, sizeof(buf));
-        
-        if (StrEqual(buf, str)) {
-            return i;
-        }
+    if (table == INVALID_STRING_TABLE)
+    {
+        table = FindStringTable("ParticleEffectNames");
     }
-    
-    return INVALID_STRING_INDEX;
-}
+    bool save = LockStringTables(false);
+    AddToStringTable(table, sEffectName);
+    LockStringTables(save);
+}  
 
